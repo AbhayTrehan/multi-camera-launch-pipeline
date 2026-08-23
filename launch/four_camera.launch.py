@@ -60,6 +60,10 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
             composable_node_descriptions=[
                 # --------------------------------------------------------
                 # 1. FLIR Hardware Driver Component
+                #
+                # Publishes distorted Mono8 at the pinned sensor geometry
+                # (binning off, 720x540 ROI at 360,270).  Not a NITROS node,
+                # so it stays out of the intra-process path.
                 # --------------------------------------------------------
                 ComposableNode(
                     package="spinnaker_camera_driver",
@@ -73,7 +77,50 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                     extra_arguments=[{"use_intra_process_comms": False}],
                 ),
                 # --------------------------------------------------------
-                # 2. Isaac ROS GPU Format Converter (mono8 -> rgb8)
+                # 2. Isaac ROS GPU Rectification (mono8, distorted -> rect)
+                #
+                # REQUIRED: cuAprilTags takes only {fx, fy, cx, cy} -- the
+                # nvAprilTagsCameraIntrinsics_t struct has nowhere to put D.
+                # These lenses run k1 ~ -0.39, which displaces the frame
+                # corners by ~43 px.  Feeding the detector distorted pixels
+                # curves the quad edges (detections rejected near the frame
+                # border) and shears the quad (mis-solved tilt).  Measured on
+                # a real detection at r_n=0.3, unrectified input cost 7.7 deg
+                # of orientation and 7% of range.
+                #
+                # Runs on mono8, ahead of the RGB expansion, so it warps a
+                # third of the bytes.
+                # --------------------------------------------------------
+                ComposableNode(
+                    package="isaac_ros_image_proc",
+                    plugin=(
+                        "nvidia::isaac_ros::image_proc::RectifyNode"
+                    ),
+                    name="rectify",
+                    namespace=camera_ns,
+                    parameters=[{
+                        "output_width": image_width,
+                        "output_height": image_height,
+                        "num_blocks": 20,
+                    }],
+                    remappings=[
+                        ("image_raw", "driver/image_raw"),
+                        ("camera_info", "driver/camera_info"),
+                    ],
+                    extra_arguments=[{"use_intra_process_comms": True}],
+                ),
+                # --------------------------------------------------------
+                # 3. Isaac ROS GPU Format Converter (mono8 -> rgb8)
+                #
+                # Present only because older isaac_ros_apriltag builds accept
+                # nitros_image_rgb8/bgr8 but not nitros_image_mono8.  Check
+                # yours with:
+                #     ros2 component types | grep apriltag
+                #     ros2 topic info -v /cam_<serial>/image_rect_color
+                # If mono8 is supported, delete this node and point the
+                # detector straight at image_rect -- it saves expanding
+                # 720x540 mono to RGB at 40 fps on every camera, which
+                # cuAprilTags then converts back to grayscale internally.
                 # --------------------------------------------------------
                 ComposableNode(
                     package="isaac_ros_image_proc",
@@ -90,16 +137,22 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         "num_blocks": 20,
                     }],
                     remappings=[
-                        ("image_raw", "driver/image_raw"),
-                        ("image", "image_raw_color"),
+                        ("image_raw", "image_rect"),
+                        ("image", "image_rect_color"),
                     ],
-                    extra_arguments=[{"use_intra_process_comms": False}],
+                    extra_arguments=[{"use_intra_process_comms": True}],
                 ),
-
-
-
                 # --------------------------------------------------------
                 # 4. Isaac ROS GPU AprilTag
+                #
+                # camera_info MUST come from the rectify node, not from the
+                # driver: camera_info_rect carries D=0 and K=P describing the
+                # rectified image.  Wiring this back to driver/camera_info
+                # would hand the solver the distorted-image intrinsics again.
+                #
+                # `size` is the outer edge of the tag's BLACK border square in
+                # metres -- not the printed sheet, and not including the white
+                # quiet zone.  Pose scale is exactly linear in this value.
                 # --------------------------------------------------------
                 ComposableNode(
                     package="isaac_ros_apriltag",
@@ -114,11 +167,11 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         "tag_family": "tag36h11",
                     }],
                     remappings=[
-                        ("image", "image_raw_color"),
-                        ("camera_info", "driver/camera_info"),
+                        ("image", "image_rect_color"),
+                        ("camera_info", "camera_info_rect"),
                         ("tag_detections", "tag_detections"),
                     ],
-                    extra_arguments=[{"use_intra_process_comms": False}],
+                    extra_arguments=[{"use_intra_process_comms": True}],
                 ),
             ],
         )

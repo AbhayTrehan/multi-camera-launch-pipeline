@@ -1,3 +1,19 @@
+# ############################################################################
+# WARNING -- DISABLED CAMERA, GEOMETRY INCONSISTENT WITH THE REST OF THE RIG.
+#
+# 25251925 is absent from config/robot.yaml and is not launched.
+#
+# Two things must be fixed before re-enabling it:
+#   1. calibration/25251925.yaml is a placeholder, not a real calibration.
+#   2. This file still specifies binning 2x2 full-FOV (~80 deg).  The three
+#      live cameras are pinned to binning-off 720x540 ROI at (360,270)
+#      (~45.5 deg).  Mixing the two gives the fuser cameras whose intrinsics
+#      and FOV silently disagree.
+#
+# Also note `cinfo_url` below is a dead key -- the driver reads
+# `camerainfo_url`, which the launch file supplies.
+# ############################################################################
+
 ################################################################################
 # Camera Metadata (Strict Serial Binding)
 ################################################################################

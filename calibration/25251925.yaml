@@ -1,3 +1,16 @@
+# ############################################################################
+# WARNING -- THIS IS NOT A REAL CALIBRATION.
+#
+# These values are placeholders from software bring-up, never measured:
+#   fx=fy=1000 (invented), cx=720 cy=540 (the FULL-SENSOR centre, which lies
+#   OUTSIDE this 720x540 image), D all zeros (these lenses run k1 ~ -0.39).
+#
+# Camera 25251925 is currently disabled -- it is absent from config/robot.yaml.
+# Do NOT add it back until this file is replaced by a real calibration run at
+# the pinned runtime geometry (binning off, 720x540 ROI at offset 360,270).
+# Enabling it as-is will emit confidently wrong poses.
+# ############################################################################
+
 image_width: 720
 image_height: 540
 camera_name: "driver"

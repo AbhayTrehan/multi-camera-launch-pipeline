@@ -1,10 +1,35 @@
+# ROS camera_info for FLIR Firefly FFY-U3-16S2C, serial 25251947
+#
+# GEOMETRY THIS FILE DESCRIBES:
+#   binning 1x1 (OFF), ROI 720x540 at offset (360,270) of the 1440x1080 sensor
+#   i.e. the native-resolution centre crop.  ~45.5 deg horizontal FOV.
+#
+# PROVENANCE: calibration_firefly.py captured at binning 2x2 / 720x540 / offset 0,0
+#   (full FOV, half resolution).  Converted to the runtime geometry above by:
+#       fx,fy  x2                  (binning 2x2 -> 1x1)
+#       cx,cy  x2, then -(360,270)   (unbin, then subtract the ROI offset)
+#   Distortion coefficients are UNCHANGED: plumb_bob coefficients live in
+#   normalised coordinates, which are invariant under both binning and cropping.
+#
+#   Original as-calibrated values were:
+#       fx=417.305930 fy=412.835092 cx=359.892336 cy=252.251457
+#
+#   A fresh calibration captured at the runtime geometry would be marginally
+#   better still -- the current D was fit over normalised radii out to ~1.05
+#   but this crop only exercises r <= 0.54.  This conversion is exact for
+#   fx/fy/cx/cy; only the D fit quality is inherited.
+#
+# NOTE: P intentionally equals K.  RectifyNode consumes K+D and publishes its
+#   own rectified camera_info on camera_info_rect (D=0, K=P).  Keeping P=K here
+#   maximises centre resolution and leaves the output fully populated (no black
+#   borders); the cost is roughly 13% of radial extent trimmed at the corners.
+
 image_width: 720
 image_height: 540
 camera_name: "driver"
 distortion_model: "plumb_bob"
 
-# Distortion Coefficients (D)
-# Format: [k1, k2, p1, p2, k3]
+# Distortion Coefficients (D) -- [k1, k2, p1, p2, k3]
 distortion_coefficients:
   rows: 1
   cols: 5
@@ -18,8 +43,8 @@ distortion_coefficients:
 camera_matrix:
   rows: 3
   cols: 3
-  data: [417.3059296737214, 0.0, 359.8923362267422,
-         0.0, 412.8350921109875, 252.25145652364546,
+  data: [834.6118593474428, 0.0, 359.7846724534844,
+         0.0, 825.670184221975, 234.50291304729092,
          0.0, 0.0, 1.0]
 
 # Rectification Matrix (R)
@@ -34,6 +59,6 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [417.3059296737214, 0.0, 359.8923362267422, 0.0,
-         0.0, 412.8350921109875, 252.25145652364546, 0.0,
+  data: [834.6118593474428, 0.0, 359.7846724534844, 0.0,
+         0.0, 825.670184221975, 234.50291304729092, 0.0,
          0.0, 0.0, 1.0, 0.0]

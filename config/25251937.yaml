@@ -15,7 +15,6 @@ camera:
     ###########################################################################
     serial_number: "25251937"
     frame_id: "25251937"
-    camera_info_url: "file:///workspaces/isaac_ros-dev/src/multi_camera_launch/calibration/25251937.yaml"
     parameter_file: "/workspaces/isaac_ros-dev/install/spinnaker_camera_driver/share/spinnaker_camera_driver/config/firefly_ffy_u3162c.yaml"
     ###########################################################################
     # Performance Profile: Mono AprilTag Engine Configuration
@@ -25,15 +24,32 @@ camera:
     frame_rate_enable: true
     frame_rate_auto: "Off"
     frame_rate: 40.0
+    ###########################################################################
+    # Sensor Geometry -- PINNED. Do not rely on power-on defaults.
+    #
+    # Native-resolution centre crop: binning OFF, 720x540 ROI at (360,270)
+    # of the 1440x1080 sensor.  ~45.5 deg horizontal FOV.
+    # calibration/25251937.yaml is generated for exactly this geometry.
+    #
+    # ORDERING MATTERS: binning must be applied BEFORE width/height/offset.
+    # With binning 2x2 the sensor is only 720x540, so offset_x=360 is out of
+    # range and Spinnaker will clamp or reject it, silently leaving the camera
+    # in full-FOV binned mode with a centre-crop calibration.  The apply order
+    # comes from `parameter_file`, not from this file -- verify it there.
+    ###########################################################################
+    binning_selector: "Sensor"
+    binning_x: 1
+    binning_y: 1
+
     image_width: 720
     image_height: 540
     offset_x: 360
     offset_y: 270
     exposure_auto: "Off"
-    exposure_time: 7500.0
+    exposure_time: 3000.0
     
-    gain_auto: "Continuous"
-    gain: 0.0
+    gain_auto: "Off"
+    gain: 6.0
 
     gamma_enable: false
     compute_brightness: false
@@ -51,8 +67,8 @@ camera:
     ###########################################################################
     debug: false
     dump_node_map: false
-    adjust_timestamp: false
-    buffer_queue_size: 1
+    adjust_timestamp: true
+    buffer_queue_size: 4
 
     diagnostic_updater.period: 1.0
     min_freq: 38.0
