@@ -46,6 +46,14 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
         image_height = calib_data["image_height"]
 
         # ── One isolated container per camera ────────────────────────────
+        # NOTE: use_intra_process_comms MUST stay False on the NITROS nodes
+        # below.  NITROS advertises its type negotiation on a side channel
+        # with TRANSIENT_LOCAL durability, and rclcpp's intra-process manager
+        # accepts only VOLATILE endpoints -- setting it True makes the node
+        # constructor throw "intraprocess communication allowed only with
+        # volatile durability" and the component fails to load.  The zero-copy
+        # path comes from composing these nodes in ONE process plus NITROS
+        # type adaptation; it does not need, and cannot use, this flag.
         # Each container gets its own GXF scheduler, thread pool, and
         # CUDA memory pools. Camera 0 can never starve Camera 1/2/3.
         camera_container = ComposableNodeContainer(
@@ -62,8 +70,7 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                 # 1. FLIR Hardware Driver Component
                 #
                 # Publishes distorted Mono8 at the pinned sensor geometry
-                # (binning off, 720x540 ROI at 360,270).  Not a NITROS node,
-                # so it stays out of the intra-process path.
+                # (binning off, 720x540 ROI at 360,270).
                 # --------------------------------------------------------
                 ComposableNode(
                     package="spinnaker_camera_driver",
@@ -107,7 +114,7 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         ("image_raw", "driver/image_raw"),
                         ("camera_info", "driver/camera_info"),
                     ],
-                    extra_arguments=[{"use_intra_process_comms": True}],
+                    extra_arguments=[{"use_intra_process_comms": False}],
                 ),
                 # --------------------------------------------------------
                 # 3. Isaac ROS GPU Format Converter (mono8 -> rgb8)
@@ -140,7 +147,7 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         ("image_raw", "image_rect"),
                         ("image", "image_rect_color"),
                     ],
-                    extra_arguments=[{"use_intra_process_comms": True}],
+                    extra_arguments=[{"use_intra_process_comms": False}],
                 ),
                 # --------------------------------------------------------
                 # 4. Isaac ROS GPU AprilTag
@@ -171,7 +178,7 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         ("camera_info", "camera_info_rect"),
                         ("tag_detections", "tag_detections"),
                     ],
-                    extra_arguments=[{"use_intra_process_comms": True}],
+                    extra_arguments=[{"use_intra_process_comms": False}],
                 ),
             ],
         )
