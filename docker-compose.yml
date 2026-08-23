@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  zenoh-bridge:
+    image: eclipse/zenoh-bridge-ros2dds:1.9.0
+    container_name: zenoh-bridge
+    network_mode: host
+    restart: unless-stopped
+
+    environment:
+      ROS_DISTRO: humble
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      RUST_LOG: info
+
+    volumes:
+      - ./zenoh.json5:/zenoh.json5:ro
+
+    command: [
+      "-c",
+      "/zenoh.json5"
+    ]

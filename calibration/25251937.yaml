@@ -1,0 +1,39 @@
+image_width: 720
+image_height: 540
+camera_name: "driver"
+distortion_model: "plumb_bob"
+
+# Distortion Coefficients (D)
+# Format: [k1, k2, p1, p2, k3]
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.3906346084446542,
+         0.17273693853963423,
+         -0.0005701221386851107,
+         0.0019860106253586744,
+         -0.03695190197803497]
+
+# Intrinsic Camera Matrix (K)
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [429.64935124135064, 0.0, 355.64624137670006,
+         0.0, 427.842070825275, 262.42791063261734,
+         0.0, 0.0, 1.0]
+
+# Rectification Matrix (R)
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+# Projection Matrix (P)
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [429.64935124135064, 0.0, 355.64624137670006, 0.0,
+         0.0, 427.842070825275, 262.42791063261734, 0.0,
+         0.0, 0.0, 1.0, 0.0]

@@ -1,0 +1,43 @@
+image_width: 720
+image_height: 540
+camera_name: "driver"
+distortion_model: "plumb_bob"
+
+# Distortion Coefficients (D)
+# Format: [k1, k2, p1, p2, k3] 
+# Filled with 0.0 for an ideal lens wrapper during software verification.
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# Intrinsic Camera Matrix (K)
+# [fx   0  cx]  where fx/fy = focal length in pixels
+# [ 0  fy  cy]  where cx/cy = principal point (exact center: 1440/2, 1080/2)
+# [ 0   0   1]
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [1000.0,    0.0,  720.0,
+            0.0, 1000.0,  540.0,
+            0.0,    0.0,    1.0]
+
+# Rectification Matrix (R)
+# Identity matrix for monocular setups. Aligns the camera coordinate frame.
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+# Projection Matrix (P)
+# [fx'  0  cx' Tx]  For monocular cameras, Tx and Ty are 0.0.
+# [ 0  fy' cy' Ty]  The upper 3x3 matches the K matrix for an ideal 
+# [ 0   0   1   0]  undistorted output space.
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1000.0,    0.0,  720.0, 0.0,
+            0.0, 1000.0,  540.0, 0.0,
+            0.0,    0.0,    1.0, 0.0]

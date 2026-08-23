@@ -1,0 +1,67 @@
+################################################################################
+# Camera Metadata (Strict Serial Binding)
+################################################################################
+camera:
+  serial_number: "25251936"
+
+################################################################################
+# ROS 2 Node Parameters
+################################################################################
+/**:
+  ros__parameters:
+
+    ###########################################################################
+    # Camera Identification & Hardware Binding
+    ###########################################################################
+    serial_number: "25251936"
+    frame_id: "25251936"
+    camera_info_url: "file:///workspaces/isaac_ros-dev/src/multi_camera_launch/calibration/25251936.yaml"
+    parameter_file: "/workspaces/isaac_ros-dev/install/spinnaker_camera_driver/share/spinnaker_camera_driver/config/firefly_ffy_u3162c.yaml"
+    ###########################################################################
+    # Performance Profile: Mono AprilTag Engine Configuration
+    ###########################################################################
+    pixel_format: "Mono8"
+    
+    frame_rate_enable: true
+    frame_rate_auto: "Off"
+    frame_rate: 40.0
+
+    image_width: 720
+    image_height: 540
+    offset_x: 360
+    offset_y: 270
+
+    exposure_auto: "Off"
+    exposure_time: 7500.0
+    
+    gain_auto: "Continuous"
+    gain: 0.0
+
+    gamma_enable: false
+    compute_brightness: false
+
+    ###########################################################################
+    # Image Acquisition Triggering
+    ###########################################################################
+    trigger_mode: "Off"
+    trigger_source: "Software"
+    trigger_selector: "FrameStart"
+    trigger_activation: "RisingEdge"
+
+    ###########################################################################
+    # Diagnostics & Buffering
+    ###########################################################################
+    debug: false
+    dump_node_map: false
+    adjust_timestamp: false
+    buffer_queue_size: 1
+
+    diagnostic_updater.period: 1.0
+    min_freq: 38.0
+    max_freq: 42.0
+
+    ###########################################################################
+    # Quality of Service (QoS)
+    ###########################################################################
+    image_qos: "SENSOR_DATA"
+    camera_info_qos: "SENSOR_DATA"
