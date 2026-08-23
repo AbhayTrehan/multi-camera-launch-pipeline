@@ -1,184 +1,150 @@
-# Robotics Testbed — Jetson Deployment Stack
+# Multi-Camera Launch Pipeline
 
-Localization & XR rendering layer of the **3DGS XR Testbed for Robots** project.
-
-> **Note on the name:** despite the repo name, this stack is built for and runs
-> on the **Ubuntu/RTX-4090 workstation**, not on the Jetson — the `Dockerfile`
-> targets an RTX 4090 and `diagnose_ros2_network.sh` explicitly diagnoses ROS 2
-> DDS connectivity *to the Jetson's AprilTag publisher container*. The
-> Jetson-side camera + AprilTag detection code lives in
-> [`multi-camera-launch-pipeline`](#related-repositories); this repo consumes
-> its output.
-
-This stack subscribes to the per-camera AprilTag detections published by the
-Jetson rig, fuses them into a single globally-consistent 6-DoF robot pose,
-renders the matching view from a pretrained 3D Gaussian Splat, and streams the
-rendered frame back over the network as a live XR video feed.
+Edge perception layer of the **3DGS XR Testbed for Robots** project. This is the
+ROS 2 launch package that runs **on the Jetson attached to the physical camera
+rig**: for every configured camera it stands up an isolated, GPU-accelerated
+NITROS pipeline (driver → format conversion → rectification → AprilTag detection)
+and publishes pose-only detections over the network. It does not fuse poses or
+render anything — that happens downstream in
+[`robotics-testbed-jetson-deployment-stack`](#related-repositories).
 
 ## Where this fits
 
 ![System architecture](docs/images/system_architecture.png)
 
-This repo implements the **Localization & XR Rendering Layer** and the
-**Streaming Output** stage of the diagram above — everything downstream of the
-Zenoh Communication Layer that carries pose observations in from the Jetson
-rig in [`multi-camera-launch-pipeline`](#related-repositories).
+This repo implements the **Physical Environment** and **Edge Perception Layer**
+stages of the diagram above, plus the outbound half of the **Zenoh Communication
+Layer**. Each camera's pipeline runs independently and concurrently, so the array
+scales across however many cameras/Jetsons are attached; only per-camera pose
+observations cross the network — never image streams.
 
-## Pipeline
+## Perception pipeline
 
-`full_pipeline.launch.py` brings up three ROS 2 nodes:
+Every camera gets image acquisition, camera calibration, rectification, and
+AprilTag detection, composed into a **single process per camera** so NVIDIA's
+NITROS framework can negotiate zero-copy, GPU-resident data transport between
+stages:
 
-![Tracking + rendering pipeline](docs/images/tracking_rendering_pipeline.png)
+![NITROS perception pipeline](docs/images/nitros_perception_pipeline.png)
 
-### 1. Multi-view tracker (`multi_view_tracker`, C++)
+A standard ROS 2 pipeline pays for a GPU→CPU copy, a serialize, a deserialize,
+and a CPU→GPU copy at every hop between nodes. NITROS instead passes a
+lightweight GPU memory handle between stages, so the frame never leaves VRAM
+until AprilTag detection is done — removing 2 memory copies and 2
+(de)serialization steps per hop, which is what keeps 4 concurrent camera
+pipelines real-time on a single Jetson Orin Nano.
 
-Subscribes to `tag_detections` from each of the 3 active cameras
-(`/cam_25251947`, `/cam_25251937`, `/cam_25251936`) using a reentrant callback
-group so all camera streams process concurrently, and buffers detections in a
-**200ms time-synchronization window** (sized to tolerate Wi-Fi latency between
-Jetson and workstation).
+Concretely, `launch/four_camera.launch.py` builds one `ComposableNodeContainer`
+per camera (staggered 2s apart on startup, to avoid CUDA-init contention), each
+containing:
 
-- When a tag is seen by **≥2 cameras**, its corner points are triangulated via
-  **DLT** and aligned to the tag's known physical geometry with the **Kabsch
-  algorithm** to recover an unambiguous 6-DoF pose.
-- When only **1 camera** sees the tag, it falls back to `solvePnP`
-  (`SOLVEPNP_IPPE_SQUARE` by default, which avoids the two-fold ambiguity that
-  makes a planar tag flip between mirrored poses); this single-view estimate
-  is downweighted (`single_view_noise_scale`, default `6.0`) since it can't
-  triangulate.
-- The result feeds an **Extended Kalman Filter** with a constant-velocity
-  model (tunable `ekf_process_noise` / `ekf_measurement_noise`), which smooths
-  the pose, estimates velocity, rejects outlier detections via a chi-square
-  gate on the position innovation (`ekf_gate_chi2`, default `16.27` ≈ 99.9th
-  percentile), and rides through brief occlusions. Orientation is additionally
-  smoothed with a time-constant (`rotation_tau`) rather than a fixed SLERP
-  step, so its behavior stays consistent even if the detection rate changes.
-- Publishes the fused pose to **`/robot/fused_pose`**.
+1. **`spinnaker_camera_driver::CameraDriver`** — publishes distorted Mono8 at
+   the pinned sensor geometry (binning off, 720×540 ROI at offset (360, 270) of
+   the FLIR Firefly's native 1440×1080 sensor — ~45.5° horizontal FOV), 40 FPS.
+2. **`ImageFormatConverterNode`** — converts Mono8 → RGB8. This has to sit
+   *before* rectification: the undistort codelet needs matching input/output
+   encodings, and letting NITROS negotiate rgb8 backwards from the detector
+   while the driver still fed mono8 causes a hard pipeline failure.
+3. **`RectifyNode`** — undistorts using the per-camera calibration in
+   `calibration/*.yaml`. AprilTag detection needs this: cuAprilTags only takes
+   `{fx, fy, cx, cy}` (no distortion coefficients), and these lenses' `k1 ≈ -0.39`
+   is enough to cost ~7.7° of orientation and 7% of range on unrectified input.
+4. **`AprilTagNode`** — detects `tag36h11` tags (`size: 0.16m` — the tag's black
+   border square, not the printed sheet) and publishes `tag_detections`.
 
-### 2. Gaussian Splatting renderer (`gsplat_renderer_node.py`, Python/CUDA)
+## Camera fleet configuration
 
-A three-thread producer-consumer node:
+`config/robot.yaml` is the hardware manifest: it lists which per-camera YAML
+files (`config/<serial>.yaml`) are actually launched. The rig currently runs
+**3 active FLIR Firefly cameras** — `25251937`, `25251936`, `25251947` — each
+bound to a physical unit by serial number, with a matching calibration file in
+`calibration/`.
 
-- **Thread 1 (pose subscriber)** — receives `/robot/fused_pose`, stores the
-  latest pose behind a lock.
-- **Thread 2 (render loop)** — continuously rasterizes a pretrained,
-  frozen (`autograd` disabled) Gaussian Splat of the scene from that pose,
-  entirely in VRAM, via [`gsplat`](https://github.com/nerfstudio-project/gsplat).
-  Coordinate frames are handled explicitly: ROS (X-forward, Y-left, Z-up) is
-  converted to gsplat's OpenGL-style convention (X-right, Y-down, Z-forward),
-  and a configurable `pose_offset` (translation from the AprilTag to the
-  virtual camera mount, e.g. rig height) is applied in either the tag frame or
-  the world frame depending on `pose_offset_frame`.
-- **Thread 3 (publisher)** — pops finished frames from a **bounded, drop-oldest
-  queue (`maxsize=2`)** and publishes them, so the renderer never blocks on a
-  stale frame; a software FPS cap holds throughput at 60 FPS.
-- Publishes raw frames to **`/gsplat/raw_image`**.
-- Key parameters: `model_checkpoint`, `quat_order` (checkpoint's quaternion
-  storage order — must be `wxyz` for this checkpoint; the wrong order renders
-  as a spiky haze), `render_width` / `render_height` (default 960×540, a
-  JetRacer CSI-camera-like feed), `camera_hfov_deg` (drives focal length so
-  resolution changes never silently change framing), and `camera_model`
-  (`pinhole` or `fisheye`).
+A 4th camera (`25251925`) has config and calibration files present but is
+**intentionally excluded** from `robot.yaml`: its calibration file is a
+placeholder, and it's still configured for 2×2-binned full-FOV capture, which
+doesn't match the other three cameras' binning-off 720×540 center-crop geometry
+— mixing the two would hand the downstream fuser cameras whose intrinsics and
+FOV silently disagree. See the warning comment at the top of
+`config/25251925.yaml` before re-enabling it.
 
-### 3. NVENC streaming (`image_transport republish`)
+The camera layout itself (positions and look-at directions) was chosen using
+the MILP solver in [`milpsolutionforcameraplacement`](#related-repositories).
 
-Republishes `/gsplat/raw_image` as `/gsplat/rendered_stream`, transcoded with
-hardware-accelerated **H.264 (NVENC)** using a low-latency profile
-(`preset:ll,tune:ull,delay:0,zerolatency:1`, 8 Mbps, GOP size 5) — this is
-what actually crosses the network back to the Jetson side and any viewers.
+## Communication layer
 
-## Data requirements
+Detections leave the Jetson via a Zenoh bridge (`docker-compose.yml` +
+`zenoh.json5`), configured to:
+- **publish** each camera's `tag_detections` topic outward to the workstation, and
+- **subscribe** to `/robot/fused_pose` and `/gsplat/raw_image` — the fused pose
+  and rendered frame coming back from
+  [`robotics-testbed-jetson-deployment-stack`](#related-repositories), for local
+  monitoring on the same box.
 
-Place these in `./data/` before `docker compose up` (mounted read-only into
-the container at `/workspace/data`):
-
-- **`camera_calibration.yaml`** — per-camera intrinsics (`K`) and extrinsics
-  (`R`, `t`) in OpenCV convention; see `ros2_ws/src/gsplat_tracker/config/camera_calibration.yaml`
-  for the expected format.
-- **`model.ckpt`** — a trained gsplat checkpoint (PyTorch), containing `means`,
-  `quats`, `scales`, `opacities`, and either `colors` or `sh_coefficients`.
-
-Helper scripts:
-- **`generate_test_model.py`** — generates a synthetic gsplat checkpoint (a
-  ground plane, a floating cube, and scattered colored clusters) so you can
-  verify the full pipeline end-to-end without real training data.
-- **`inspect_checkpoint.py`** — prints keys/shapes/dtypes/value ranges of a
-  checkpoint, for debugging loading or color issues.
-- **`diagnose_ros2_network.sh`** — run inside the container to verify ROS 2
-  DDS connectivity to the Jetson's AprilTag publisher.
-
-## Results
-
-From validation on physical hardware (Table 2 in the project report):
-
-| Metric | Value | Latency |
-|---|---|---|
-| AprilTag Detection Rate | 40 FPS | 48 ms |
-| Robot Pose Update Rate | 20 Hz | 18 ms |
-| XR Rendering | 35 FPS | 80 ms |
-| End-to-End Pipeline | 20 FPS | 150 ms |
-| CPU Utilization (server) | 4% | – |
-| GPU Utilization | 20% | – |
-| Memory Usage | 1395 MB / 24565 MB | – |
-| Power Consumption | 54 W | – |
-
-Synthetic objects (a chair, a potted plant) inserted into the live 3DGS scene
-via a custom GUI, rendered from the tracked robot pose:
-
-![Virtual object insertion — example A](docs/images/virtual_object_insertion_a.png)
-![Virtual object insertion — example B](docs/images/virtual_object_insertion_b.png)
+`fastdds_nonblocking.xml` configures the local DDS layer for asynchronous,
+best-effort publishing so a slow subscriber never blocks camera acquisition.
 
 ## Directory structure
 
 ```
-robotics-testbed-jetson-deployment-stack/
-├── Dockerfile                      # CUDA 12.2 + ROS 2 Humble + PyTorch + gsplat, targets RTX 4090
-├── docker-compose.yml              # gsplat_stack service (host net + IPC, GPU passthrough)
-├── data/                           # camera_calibration.yaml + model.ckpt (see above)
-├── generate_test_model.py          # synthetic checkpoint generator
-├── inspect_checkpoint.py           # checkpoint debugging tool
-├── diagnose_ros2_network.sh        # DDS connectivity check vs. the Jetson
-├── fastdds_unicast_pc.xml          # DDS profile for the workstation
-└── ros2_ws/src/
-    ├── gsplat_tracker/
-    │   ├── src/multi_view_tracker.cpp        # DLT + Kabsch + EKF fusion
-    │   ├── gsplat_tracker/gsplat_renderer_node.py  # 3DGS renderer
-    │   └── launch/full_pipeline.launch.py
-    └── isaac_ros_apriltag_interfaces/        # AprilTagDetection(Array) message definitions
+multi-camera-launch-pipeline/
+├── launch/four_camera.launch.py   # builds one composable-node container per camera
+├── multi_camera_launch/           # ament_python package
+├── config/
+│   ├── robot.yaml                 # which cameras to launch
+│   └── <serial>.yaml              # per-camera driver + AprilTag parameters
+├── calibration/<serial>.yaml      # per-camera intrinsics/distortion (camera_info format)
+├── calibration_firefly.py         # camera calibration capture/generation script
+├── docker-compose.yml             # zenoh-bridge-ros2dds service
+├── zenoh.json5                    # Zenoh bridge topic allow-lists
+├── fastdds_nonblocking.xml        # DDS QoS profile (async, best-effort)
+└── test/                          # ament lint/style tests
 ```
 
 ## Requirements
 
-- Ubuntu workstation with an NVIDIA GPU (developed against an **RTX 4090**),
-  driver ≥ 535, CUDA 12.2, NVIDIA Container Toolkit
-- ROS 2 Humble
-- PyTorch 2.3.1 (cu121) + [`gsplat`](https://github.com/nerfstudio-project/gsplat)
-- Network connectivity (Zenoh bridge) to the Jetson running
-  [`multi-camera-launch-pipeline`](#related-repositories)
+- NVIDIA Jetson Orin Nano (up to 4 cameras per device)
+- ROS 2 Humble + NVIDIA Isaac ROS (`isaac_ros_image_proc`, `isaac_ros_apriltag`)
+- `spinnaker_camera_driver` (FLIR Spinnaker SDK) for FLIR Firefly USB3 cameras
+- `eclipse/zenoh-bridge-ros2dds` (pulled via `docker-compose.yml`)
 
 ## Usage
 
 ```bash
-docker compose build
-docker compose up -d
+# Build the launch package (from a colcon workspace containing this repo)
+colcon build --packages-select multi_camera_launch
+source install/setup.bash
 
-docker compose exec gsplat_stack bash
-ros2 launch gsplat_tracker full_pipeline.launch.py \
-    calibration_file:=/workspace/data/camera_calibration.yaml \
-    model_checkpoint:=/workspace/data/model.ckpt \
-    tag_size:=0.16 \
-    render_width:=1280 render_height:=720
+# Launch all cameras listed in config/robot.yaml
+ros2 launch multi_camera_launch four_camera.launch.py \
+    robot_config:=/path/to/config/robot.yaml
+
+# In a separate terminal, bring up the Zenoh bridge to the workstation
+docker compose up
 ```
 
-To sanity-check the pipeline without real cameras, run
-`generate_test_model.py` to produce a test `data/model.ckpt` first.
+## Known issues / current limitations
+
+- **Resolution ceiling**: the pipeline hits its target frame rate (~40 FPS
+  detection) at 720×540, but detection FPS and latency degrade severely at
+  1440×1080 due to USB bandwidth limits and memory fragmentation.
+- **Rectification distortion bug**: there is a known issue in the rectification
+  node that introduces unusual image distortion at certain settings; it has
+  been removed from some pipeline configurations pending a fix.
+
+| Cameras | Camera FPS | Detection FPS | CPU % | Memory (MB) | GPU % | Detection latency (ms) |
+|---|---|---|---|---|---|---|
+| 1 | 40 | 39.9 | 20 | 2455 | 50 | 20 |
+| 2 | 40 | 39.9 | 35 | 3200 | 60 | 22 |
+| 3 | 30 | 39.9 | 55 | 4244 | 73 | 27 |
+| 4 | 30 | 39.6 | 60 | 5200 | 82 | 28 |
 
 ## Related repositories
 
 Part of the **3DGS XR Testbed for Robots** project, alongside:
 
-- **`multi-camera-launch-pipeline`** — the Jetson-side edge perception stack
-  (FLIR camera drivers + GPU AprilTag detection) whose `tag_detections`
-  topics feed the multi-view tracker in this repo.
-- **`milpsolutionforcameraplacement`** — the MILP optimizer used to choose the
-  camera rig's layout in the first place.
+- **`robotics-testbed-jetson-deployment-stack`** — subscribes to the
+  `tag_detections` topics this repo publishes, fuses them into a single 6-DoF
+  robot pose, and renders + streams the corresponding XR view back.
+- **`milpsolutionforcameraplacement`** — the MILP optimizer used to choose this
+  rig's camera count and layout.
