@@ -84,50 +84,26 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                     extra_arguments=[{"use_intra_process_comms": False}],
                 ),
                 # --------------------------------------------------------
-                # 2. Isaac ROS GPU Rectification (mono8, distorted -> rect)
+                # 2. Isaac ROS GPU Format Converter (mono8 -> rgb8)
                 #
-                # REQUIRED: cuAprilTags takes only {fx, fy, cx, cy} -- the
-                # nvAprilTagsCameraIntrinsics_t struct has nowhere to put D.
-                # These lenses run k1 ~ -0.39, which displaces the frame
-                # corners by ~43 px.  Feeding the detector distorted pixels
-                # curves the quad edges (detections rejected near the frame
-                # border) and shears the quad (mis-solved tilt).  Measured on
-                # a real detection at r_n=0.3, unrectified input cost 7.7 deg
-                # of orientation and 7% of range.
+                # This MUST sit AHEAD of the rectifier, not after it.  The
+                # tensorops undistort codelet requires its input and output
+                # image types to match -- it cannot change encoding while it
+                # warps.  With rectify placed first, NITROS negotiated rgb8
+                # on the rectify->converter link (the detector demands rgb8
+                # and that preference propagates backwards through
+                # negotiation) while the driver still fed mono8 in, so
+                # undistort saw mono8 in / rgb8 out and failed every tick:
+                #     Undistort.cpp@355: invalid input/output type for
+                #     image undistort
+                #     -> Failed to tick codelet undistort_algo   GXF_FAILURE
+                #     -> NitrosSubscriber: receiver entity GXF_ENTITY_NOT_FOUND
+                # Converting first pins both sides of the rectifier to rgb8.
                 #
-                # Runs on mono8, ahead of the RGB expansion, so it warps a
-                # third of the bytes.
-                # --------------------------------------------------------
-                ComposableNode(
-                    package="isaac_ros_image_proc",
-                    plugin=(
-                        "nvidia::isaac_ros::image_proc::RectifyNode"
-                    ),
-                    name="rectify",
-                    namespace=camera_ns,
-                    parameters=[{
-                        "output_width": image_width,
-                        "output_height": image_height,
-                        "num_blocks": 20,
-                    }],
-                    remappings=[
-                        ("image_raw", "driver/image_raw"),
-                        ("camera_info", "driver/camera_info"),
-                    ],
-                    extra_arguments=[{"use_intra_process_comms": False}],
-                ),
-                # --------------------------------------------------------
-                # 3. Isaac ROS GPU Format Converter (mono8 -> rgb8)
-                #
-                # Present only because older isaac_ros_apriltag builds accept
-                # nitros_image_rgb8/bgr8 but not nitros_image_mono8.  Check
-                # yours with:
-                #     ros2 component types | grep apriltag
-                #     ros2 topic info -v /cam_<serial>/image_rect_color
-                # If mono8 is supported, delete this node and point the
-                # detector straight at image_rect -- it saves expanding
-                # 720x540 mono to RGB at 40 fps on every camera, which
-                # cuAprilTags then converts back to grayscale internally.
+                # Cost is warping 3 channels instead of 1.  If your
+                # isaac_ros_apriltag build accepts nitros_image_mono8, the
+                # cheaper arrangement is to delete this node entirely and run
+                # driver -> rectify -> detector end to end in mono8.
                 # --------------------------------------------------------
                 ComposableNode(
                     package="isaac_ros_image_proc",
@@ -144,8 +120,42 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         "num_blocks": 20,
                     }],
                     remappings=[
-                        ("image_raw", "image_rect"),
-                        ("image", "image_rect_color"),
+                        ("image_raw", "driver/image_raw"),
+                        ("image", "image_raw_color"),
+                    ],
+                    extra_arguments=[{"use_intra_process_comms": False}],
+                ),
+                # --------------------------------------------------------
+                # 3. Isaac ROS GPU Rectification (rgb8, distorted -> rect)
+                #
+                # REQUIRED: cuAprilTags takes only {fx, fy, cx, cy} -- the
+                # nvAprilTagsCameraIntrinsics_t struct has nowhere to put D.
+                # These lenses run k1 ~ -0.39, which displaces the frame
+                # corners by ~43 px.  Feeding the detector distorted pixels
+                # curves the quad edges (detections rejected near the frame
+                # border) and shears the quad (mis-solved tilt).  Measured on
+                # a real detection at r_n=0.3, unrectified input cost 7.7 deg
+                # of orientation and 7% of range.
+                #
+                # Takes camera_info from the driver (K + D describing the
+                # distorted image) and republishes camera_info_rect with
+                # D=0, which is what the detector must consume.
+                # --------------------------------------------------------
+                ComposableNode(
+                    package="isaac_ros_image_proc",
+                    plugin=(
+                        "nvidia::isaac_ros::image_proc::RectifyNode"
+                    ),
+                    name="rectify",
+                    namespace=camera_ns,
+                    parameters=[{
+                        "output_width": image_width,
+                        "output_height": image_height,
+                        "num_blocks": 20,
+                    }],
+                    remappings=[
+                        ("image_raw", "image_raw_color"),
+                        ("camera_info", "driver/camera_info"),
                     ],
                     extra_arguments=[{"use_intra_process_comms": False}],
                 ),
@@ -174,7 +184,7 @@ def evaluate_camera_pipeline(context, *args, **kwargs):
                         "tag_family": "tag36h11",
                     }],
                     remappings=[
-                        ("image", "image_rect_color"),
+                        ("image", "image_rect"),
                         ("camera_info", "camera_info_rect"),
                         ("tag_detections", "tag_detections"),
                     ],
