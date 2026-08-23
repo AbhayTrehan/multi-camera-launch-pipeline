@@ -6,7 +6,7 @@ rig**: for every configured camera it stands up an isolated, GPU-accelerated
 NITROS pipeline (driver → format conversion → rectification → AprilTag detection)
 and publishes pose-only detections over the network. It does not fuse poses or
 render anything — that happens downstream in
-[`robotics-testbed-jetson-deployment-stack`](#related-repositories).
+[`robotics-testbed-jetson-deployment-stack`](https://github.com/astral-fi/robotics-testbed-jetson-deployment-stack).
 
 ## Where this fits
 
@@ -69,7 +69,7 @@ FOV silently disagree. See the warning comment at the top of
 `config/25251925.yaml` before re-enabling it.
 
 The camera layout itself (positions and look-at directions) was chosen using
-the MILP solver in [`milpsolutionforcameraplacement`](#related-repositories).
+the MILP solver in [`milpsolutionforcameraplacement`](https://github.com/AbhayTrehan/camera-placement-milp).
 
 ## Communication layer
 
@@ -78,7 +78,7 @@ Detections leave the Jetson via a Zenoh bridge (`docker-compose.yml` +
 - **publish** each camera's `tag_detections` topic outward to the workstation, and
 - **subscribe** to `/robot/fused_pose` and `/gsplat/raw_image` — the fused pose
   and rendered frame coming back from
-  [`robotics-testbed-jetson-deployment-stack`](#related-repositories), for local
+  [`robotics-testbed-jetson-deployment-stack`](https://github.com/astral-fi/robotics-testbed-jetson-deployment-stack), for local
   monitoring on the same box.
 
 `fastdds_nonblocking.xml` configures the local DDS layer for asynchronous,
@@ -143,8 +143,8 @@ docker compose up
 
 Part of the **3DGS XR Testbed for Robots** project, alongside:
 
-- **`robotics-testbed-jetson-deployment-stack`** — subscribes to the
+- **[`robotics-testbed-jetson-deployment-stack`](https://github.com/astral-fi/robotics-testbed-jetson-deployment-stack)** — subscribes to the
   `tag_detections` topics this repo publishes, fuses them into a single 6-DoF
   robot pose, and renders + streams the corresponding XR view back.
-- **`milpsolutionforcameraplacement`** — the MILP optimizer used to choose this
+- **[`milpsolutionforcameraplacement`](https://github.com/AbhayTrehan/camera-placement-milp)** — the MILP optimizer used to choose this
   rig's camera count and layout.
