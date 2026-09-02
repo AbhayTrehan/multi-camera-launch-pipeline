@@ -1,5 +1,7 @@
 # Multi-Camera Launch Pipeline
 
+**Demo:** ▶️ https://youtu.be/RfWbA6RE8b8
+
 Edge perception layer of the **3DGS XR Testbed for Robots** project. This is the
 ROS 2 launch package that runs **on the Jetson attached to the physical camera
 rig**: for every configured camera it stands up an isolated, GPU-accelerated
